@@ -1,4 +1,4 @@
-# Builds a signed arm64 APK of nOpenRA and publishes it as a GitHub release,
+# Builds a signed APK of nOpenRA and publishes it as a GitHub release,
 # so the app can be installed and updated through Obtainium instead of Google Play.
 #
 # Every run merges the latest nurbsn/OpenRA.Android main into this fork's main
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out fork
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -72,14 +72,14 @@ jobs:
 
       - name: Set up JDK
         if: steps.version.outputs.skip != 'true'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Set up .NET
         if: steps.version.outputs.skip != 'true'
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -118,7 +118,6 @@ jobs:
         if: steps.version.outputs.skip != 'true'
         run: |
           dotnet publish OpenRA.Android/OpenRA.Android.csproj -f net10.0-android -c Release \
-            -p:RuntimeIdentifiers=android-arm64 \
             -p:AndroidPackageFormat=apk \
             -p:ApplicationDisplayVersion="${{ steps.version.outputs.name }}" \
             -p:ApplicationVersion="${{ steps.version.outputs.code }}" \
@@ -133,7 +132,7 @@ jobs:
             exit 1
           fi
           mkdir -p out
-          cp "$apk" "out/nOpenRA-${{ steps.version.outputs.name }}-arm64.apk"
+          cp "$apk" "out/nOpenRA-${{ steps.version.outputs.name }}.apk"
           ls -la out
 
       - name: Upload artifact
