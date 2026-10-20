@@ -147,7 +147,8 @@ namespace OpenRA.Platforms.Default
 
 			PrepareTexture();
 
-			var glInternalFormat = OpenGL.Profile == GLProfile.Embedded ? OpenGL.GL_BGRA : OpenGL.GL_RGBA8;
+			// GLES only accepts unsized formats compatible with the framebuffer here; Mali rejects GL_BGRA with GL_INVALID_ENUM.
+			var glInternalFormat = OpenGL.Profile == GLProfile.Embedded ? OpenGL.GL_RGBA : OpenGL.GL_RGBA8;
 			OpenGL.glCopyTexImage2D(OpenGL.GL_TEXTURE_2D, 0, glInternalFormat, rect.X, rect.Y, rect.Width, rect.Height, 0);
 			OpenGL.CheckGLError();
 		}
