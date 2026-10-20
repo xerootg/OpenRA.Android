@@ -107,6 +107,7 @@ ModContent:
 		cnccontent|installer/nod95.yaml
 		cnccontent|installer/origin.yaml
 		cnccontent|installer/steam.yaml
+		cnccontent|installer/classics.yaml
 
 SoundFormats:
 
