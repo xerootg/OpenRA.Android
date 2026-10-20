@@ -117,6 +117,10 @@ jobs:
       - name: Build APK
         if: steps.version.outputs.skip != 'true'
         run: |
+          # The manifest's literal version attributes win over the MSBuild properties.
+          sed -i -e 's/android:versionCode="[^"]*"/android:versionCode="${{ steps.version.outputs.code }}"/' \
+            -e 's/android:versionName="[^"]*"/android:versionName="${{ steps.version.outputs.name }}"/' \
+            OpenRA.Android/AndroidManifest.xml
           dotnet publish OpenRA.Android/OpenRA.Android.csproj -f net10.0-android -c Release \
             -p:AndroidPackageFormat=apk \
             -p:ApplicationDisplayVersion="${{ steps.version.outputs.name }}" \
