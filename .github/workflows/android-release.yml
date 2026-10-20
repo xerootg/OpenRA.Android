@@ -1,0 +1,158 @@
+# Builds a signed arm64 APK of nOpenRA and publishes it as a GitHub release,
+# so the app can be installed and updated through Obtainium instead of Google Play.
+#
+# Every run merges the latest nurbsn/OpenRA.Android main into this fork's main
+# (locally, nothing is pushed) and releases only when that merged tree has not
+# been released yet.
+#
+# Required repository secrets:
+#   ANDROID_KEYSTORE_B64       base64 of the release keystore (alias "nopenra")
+#   ANDROID_KEYSTORE_PASSWORD  store and key password
+
+name: Android Release
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Release even if this tree was already released
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/nurbsn/OpenRA.Android
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM"
+          git fetch --no-tags upstream main
+          git merge --no-edit upstream/main
+
+      - name: Work out version
+        id: version
+        run: |
+          display=$(sed -n 's:.*<ApplicationDisplayVersion>\(.*\)</ApplicationDisplayVersion>.*:\1:p' OpenRA.Android/OpenRA.Android.csproj)
+          tree=$(git rev-parse --short=7 'HEAD^{tree}')
+          name="${display}-${tree}"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${name}" >> "$GITHUB_OUTPUT"
+          # Upstream ships versionCode 3; stay far above it so this build always updates.
+          echo "code=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_OUTPUT"
+          echo "upstream=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+          if gh release view "v${name}" >/dev/null 2>&1 && [ "${{ inputs.force }}" != "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "v${name} is already released; nothing to do."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Set up JDK
+        if: steps.version.outputs.skip != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up .NET
+        if: steps.version.outputs.skip != 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Android workload
+        if: steps.version.outputs.skip != 'true'
+        run: dotnet workload install android
+
+      - name: Package game data
+        if: steps.version.outputs.skip != 'true'
+        shell: pwsh
+        run: ./OpenRA.Android/package-assets.ps1
+
+      - name: Decode keystore
+        id: keystore
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "password=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          else
+            # Without the secrets, still prove the build with a throwaway key, but never release it:
+            # an APK signed with a one-off key could not be updated later.
+            echo "::warning::Release keystore secrets are not set; building with a throwaway key and skipping the release"
+            echo "throwaway=true" >> "$GITHUB_OUTPUT"
+            password=$(openssl rand -hex 16)
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -alias nopenra -keyalg RSA -keysize 2048 \
+              -validity 1 -storepass "$password" -keypass "$password" -dname "CN=throwaway"
+            echo "::add-mask::$password"
+            echo "password=$password" >> "$GITHUB_ENV"
+          fi
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+
+      - name: Build APK
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          dotnet publish OpenRA.Android/OpenRA.Android.csproj -f net10.0-android -c Release \
+            -p:RuntimeIdentifiers=android-arm64 \
+            -p:AndroidPackageFormat=apk \
+            -p:ApplicationDisplayVersion="${{ steps.version.outputs.name }}" \
+            -p:ApplicationVersion="${{ steps.version.outputs.code }}" \
+            -p:AndroidKeyStore=true \
+            -p:AndroidSigningKeyStore="$RUNNER_TEMP/release.jks" \
+            -p:AndroidSigningKeyAlias=nopenra \
+            -p:AndroidSigningKeyPass=env:password \
+            -p:AndroidSigningStorePass=env:password
+          apk=$(find bin OpenRA.Android/bin -name '*-Signed.apk' -newer OpenRA.Android/assets/openra-data.zip 2>/dev/null | head -n 1)
+          if [ -z "$apk" ]; then
+            echo "::error::No signed APK was produced"
+            exit 1
+          fi
+          mkdir -p out
+          cp "$apk" "out/nOpenRA-${{ steps.version.outputs.name }}-arm64.apk"
+          ls -la out
+
+      - name: Upload artifact
+        if: steps.version.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nOpenRA-${{ steps.version.outputs.name }}
+          path: out/*.apk
+
+      - name: Publish release
+        if: steps.version.outputs.skip != 'true' && steps.keystore.outputs.throwaway != 'true'
+        run: |
+          gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release create "$TAG" out/*.apk \
+            --target "$GITHUB_SHA" \
+            --title "nOpenRA $NAME" \
+            --notes "Built from nurbsn/OpenRA.Android@${UPSTREAM_SHA} merged into ${GITHUB_REPOSITORY}@${GITHUB_SHA::7}."
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          NAME: ${{ steps.version.outputs.name }}
+          UPSTREAM_SHA: ${{ steps.version.outputs.upstream }}
